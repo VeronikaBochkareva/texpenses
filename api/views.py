@@ -1,40 +1,107 @@
+from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from .models import Categories
-from django.http import JsonResponse
+from django.db.models import Sum
+from .models import Users, Categories, Settings, Transactions
 
 @api_view(['GET'])
-def categories(request):
+def categories_list(request):
+    categories = Categories.objects.all().values('id', 'name')
+    return Response(list(categories))
+
+@api_view(['GET'])
+def expenses_list(request):
     # Получаем все категории
     categories = Categories.objects.all()
     
-    # Формируем список категорий в нужном формате
-    categories_list = [
-        {
-            "id": category.id,
-            "name": category.name
-        }
-        for category in categories
-    ]
+    result_categories = []
     
-    # Возвращаем JSON ответ
-    return JsonResponse({
-        "categories": categories_list
-    })
-
-@api_view(['GET'])
-def expenses(request):
-    if request.method == 'GET':
-        Expenses = []
-        return Response(Expenses)
+    for category in categories:
+        # Сумма всех транзакций по данной категории
+        total_spent = Transactions.objects.filter(
+            category=category
+        ).aggregate(total=Sum('sum'))['total'] or 0
+        
+        # Получаем настройки для данной категории (берем первую запись)
+        setting = Settings.objects.filter(student=category).first()
+        total_limit = setting.total if setting else 0
+        
+        # Разница между лимитом и потраченной суммой
+        remaining = total_limit - total_spent
+        
+        result_categories.append({
+            'name': category.name,
+            'sum_spent': total_spent,
+            'sum_remain': remaining
+        })
+    
+    return Response({'categories': result_categories})
 
 @api_view(['GET', 'POST'])
-def settings(request):
+def settings_view(request):
+    
     if request.method == 'GET':
-        Settings = []
-        return Response(Settings)
+        # Получаем все настройки
+        settings = Settings.objects.select_related('student').all()
+        
+        result_categories = []
+        
+        for setting in settings:
+            # Сумма всех транзакций по данной категории
+            total_spent = Transactions.objects.filter(
+                category=setting.student
+            ).aggregate(total=Sum('sum'))['total'] or 0
+            
+            result_categories.append({
+                'name': setting.student.name,
+                'sum': total_spent,
+                'total': setting.total
+            })
+        
+        return Response({'categories': result_categories})
+    
     elif request.method == 'POST':
-        Settings = []
-        return Response(Settings)
-
-
+        # Обновление настроек
+        data = request.data
+        
+        if 'categories' not in data:
+            return Response(
+                {'error': 'Missing categories in request data'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        updated_categories = []
+        
+        for category_data in data['categories']:
+            category_name = category_data.get('name')
+            new_total = category_data.get('total')
+            
+            if not category_name or new_total is None:
+                continue
+            
+            try:
+                category = Categories.objects.get(name=category_name)
+                setting, created = Settings.objects.get_or_create(
+                    student=category,
+                    defaults={'total': new_total}
+                )
+                
+                if not created:
+                    setting.total = new_total
+                    setting.save()
+                
+                # Пересчитываем текущую сумму транзакций
+                current_sum = Transactions.objects.filter(
+                    category=category
+                ).aggregate(total=Sum('sum'))['total'] or 0
+                
+                updated_categories.append({
+                    'name': category_name,
+                    'sum': current_sum,
+                    'total': new_total
+                })
+                
+            except Categories.DoesNotExist:
+                continue
+        
+        return Response({'categories': updated_categories})
