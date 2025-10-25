@@ -5,6 +5,7 @@ from django.db.models import Sum
 from .models import Users, Categories, Settings
 from django.db import transaction
 
+from .utils import get_category_transactions_sum, load_transactions
 
 @api_view(['GET'])
 def categories_list(request):
@@ -13,22 +14,16 @@ def categories_list(request):
 
 @api_view(['GET'])
 def expenses_list(request):
-    # Получаем все категории
     categories = Categories.objects.all()
     
     result_categories = []
     
     for category in categories:
-        # Сумма всех транзакций по данной категории
-        total_spent = Transactions.objects.filter(
-            category=category
-        ).aggregate(total=Sum('sum'))['total'] or 0
+        total_spent = get_category_transactions_sum(category.id)
         
-        # Получаем настройки для данной категории (берем первую запись)
         setting = Settings.objects.filter(users=category).first()
         total_limit = setting.total if setting else 0
         
-        # Разница между лимитом и потраченной суммой
         remaining = total_limit - total_spent
         
         result_categories.append({
@@ -145,3 +140,8 @@ def settings_view(request):
                 {'error': str(e)}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+@api_view(['GET'])
+def transactions_view(request):
+    transactions = load_transactions()
+    return Response(transactions)
