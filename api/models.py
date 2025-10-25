@@ -12,6 +12,6 @@ class Categories(models.Model):
 
 
 class Settings(models.Model):
-    student = models.ForeignKey(Categories, on_delete=models.CASCADE)
-    course = models.ForeignKey(Users, on_delete=models.CASCADE)
+    users = models.ForeignKey(Categories, on_delete=models.CASCADE)
+    categories = models.ForeignKey(Users, on_delete=models.CASCADE)
     total = models.IntegerField()

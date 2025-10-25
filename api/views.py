@@ -2,7 +2,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from django.db.models import Sum
-from .models import Users, Categories, Settings, Transactions
+from .models import Users, Categories, Settings
 
 @api_view(['GET'])
 def categories_list(request):
@@ -23,7 +23,7 @@ def expenses_list(request):
         ).aggregate(total=Sum('sum'))['total'] or 0
         
         # Получаем настройки для данной категории (берем первую запись)
-        setting = Settings.objects.filter(student=category).first()
+        setting = Settings.objects.filter(users=category).first()
         total_limit = setting.total if setting else 0
         
         # Разница между лимитом и потраченной суммой
@@ -42,18 +42,18 @@ def settings_view(request):
     
     if request.method == 'GET':
         # Получаем все настройки
-        settings = Settings.objects.select_related('student').all()
+        settings = Settings.objects.select_related('users').all()
         
         result_categories = []
         
         for setting in settings:
             # Сумма всех транзакций по данной категории
             total_spent = Transactions.objects.filter(
-                category=setting.student
+                category=setting.users
             ).aggregate(total=Sum('sum'))['total'] or 0
             
             result_categories.append({
-                'name': setting.student.name,
+                'name': setting.users.name,
                 'sum': total_spent,
                 'total': setting.total
             })
@@ -82,7 +82,7 @@ def settings_view(request):
             try:
                 category = Categories.objects.get(name=category_name)
                 setting, created = Settings.objects.get_or_create(
-                    student=category,
+                    users=category,
                     defaults={'total': new_total}
                 )
                 
