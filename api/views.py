@@ -3,6 +3,8 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from django.db.models import Sum
 from .models import Users, Categories, Settings
+from django.db import transaction
+
 
 @api_view(['GET'])
 def categories_list(request):
@@ -37,71 +39,109 @@ def expenses_list(request):
     
     return Response({'categories': result_categories})
 
+
 @api_view(['GET', 'POST'])
 def settings_view(request):
-    
     if request.method == 'GET':
-        # Получаем все настройки
-        settings = Settings.objects.select_related('users').all()
-        
-        result_categories = []
-        
-        for setting in settings:
-            # Сумма всех транзакций по данной категории
-            total_spent = Transactions.objects.filter(
-                category=setting.users
-            ).aggregate(total=Sum('sum'))['total'] or 0
+        try:
+            user_id = request.GET.get('user_id')
+            if not user_id:
+                return Response(
+                    {'error': 'user_id parameter is required'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             
-            result_categories.append({
-                'name': setting.users.name,
-                'sum': total_spent,
-                'total': setting.total
-            })
-        
-        return Response({'categories': result_categories})
+            user = Users.objects.get(id=user_id)
+            
+            category_settings = Settings.objects.filter(
+                categories=user
+            ).select_related('users')
+            
+            response_data = {
+                'user_id': user.id,
+                'user_name': user.name,
+                'limit': user.limit,
+                'category_limits': [
+                    {
+                        'category_id': setting.users.id,
+                        'category_name': setting.users.name,
+                        'total': setting.total
+                    }
+                    for setting in category_settings
+                ]
+            }
+            
+            return Response(response_data)
+            
+        except Users.DoesNotExist:
+            return Response(
+                {'error': 'User not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     elif request.method == 'POST':
-        # Обновление настроек
-        data = request.data
-        
-        if 'categories' not in data:
-            return Response(
-                {'error': 'Missing categories in request data'}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        updated_categories = []
-        
-        for category_data in data['categories']:
-            category_name = category_data.get('name')
-            new_total = category_data.get('total')
+        # Обновление данных пользователя
+        try:
+            data = request.data
             
-            if not category_name or new_total is None:
-                continue
-            
-            try:
-                category = Categories.objects.get(name=category_name)
-                setting, created = Settings.objects.get_or_create(
-                    users=category,
-                    defaults={'total': new_total}
+            user_id = data.get('user_id')
+            if not user_id:
+                return Response(
+                    {'error': 'user_id is required'}, 
+                    status=status.HTTP_400_BAD_REQUEST
                 )
+            
+            with transaction.atomic():
+                user = Users.objects.get(id=user_id)
+                if 'limit' in data:
+                    user.limit = data['limit']
+                    user.save()
                 
-                if not created:
-                    setting.total = new_total
-                    setting.save()
+                category_limits = data.get('category_limits', [])
                 
-                # Пересчитываем текущую сумму транзакций
-                current_sum = Transactions.objects.filter(
-                    category=category
-                ).aggregate(total=Sum('sum'))['total'] or 0
-                
-                updated_categories.append({
-                    'name': category_name,
-                    'sum': current_sum,
-                    'total': new_total
-                })
-                
-            except Categories.DoesNotExist:
-                continue
-        
-        return Response({'categories': updated_categories})
+                for category_limit in category_limits:
+                    category_id = category_limit.get('category_id')
+                    total = category_limit.get('total')
+                    
+                    if category_id is not None and total is not None:
+                        setting, created = Settings.objects.update_or_create(
+                            users_id=category_id,
+                            categories=user,
+                            defaults={'total': total}
+                        )
+            
+            updated_category_settings = Settings.objects.filter(
+                categories=user
+            ).select_related('users')
+            
+            response_data = {
+                'user_id': user.id,
+                'user_name': user.name,
+                'limit': user.limit,
+                'category_limits': [
+                    {
+                        'category_id': setting.users.id,
+                        'category_name': setting.users.name,
+                        'total': setting.total
+                    }
+                    for setting in updated_category_settings
+                ]
+            }
+            
+            return Response(response_data, status=status.HTTP_200_OK)
+            
+        except Users.DoesNotExist:
+            return Response(
+                {'error': 'User not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
